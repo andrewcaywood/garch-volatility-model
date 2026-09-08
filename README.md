@@ -27,9 +27,10 @@ naive baseline, or does added model complexity fail to pay off in practice?
    to confirm the model actually removes volatility clustering
 5. Fit EGARCH(1,1) to test for the equity "leverage effect" (asymmetric
    response to negative vs. positive shocks)
-6. Evaluate all models out-of-sample against realized volatility using RMSE
-7. Re-evaluate against an unsmoothed daily volatility proxy, to test whether
-   model ranking depends on the evaluation target
+6. Produce target-aligned, one-step-ahead variance forecasts and evaluate them
+   against squared returns using MSE and QLIKE
+7. Run a secondary volatility-level check against a bias-adjusted absolute-return
+   proxy
 
 ## Key results
 
@@ -39,8 +40,9 @@ naive baseline, or does added model complexity fail to pay off in practice?
 | Residual clustering removed | Ljung-Box p = 0.82 (post-GARCH) vs. p ~ 0.0 (raw) |
 | Leverage effect (EGARCH) | gamma ~ -0.172 (confirmed, negative) |
 | EGARCH vs. GARCH fit | AIC 10,564.6 vs. 10,756.9 (EGARCH better) |
-| OOS RMSE, smoothed target | Naive 0.0099 vs. GARCH 0.0525 (naive wins) |
-| OOS RMSE, daily target | GARCH 0.0994 vs. Naive 0.1276 (GARCH wins) |
+| OOS variance MSE | EGARCH 1.7011e-7 vs. GARCH 1.8461e-7 vs. naive 1.9909e-7 |
+| OOS variance QLIKE | EGARCH -8.5634 vs. GARCH -8.4963 vs. naive -8.3742 |
+| Secondary volatility RMSE | EGARCH 0.1332 vs. GARCH 0.1390 vs. naive 0.1482 |
 
 The full discussion, including why the model ranking reverses across targets
 and what it means, is in [`WRITEUP.md`](WRITEUP.md).
@@ -54,9 +56,10 @@ scripts/
   03_garch_fit.py                - Fit GARCH(1,1)
   04_residual_diagnostics.py    - Ljung-Box test on residuals
   05_egarch_fit.py               - Fit EGARCH(1,1), leverage effect
-  06_out_of_sample_eval.py      - OOS RMSE vs. smoothed target
-  07_daily_target_comparison.py - OOS RMSE vs. daily target
+  06_out_of_sample_eval.py      - Target-aligned OOS MSE and QLIKE
+  07_daily_target_comparison.py - Secondary volatility-level evaluation
 outputs/                         - Generated CSVs and plots
+tests/                           - Alignment, causality, loss, and proxy tests
 WRITEUP.md                       - Full research-style write-up
 requirements.txt
 README.md
@@ -73,14 +76,19 @@ python scripts/04_residual_diagnostics.py
 python scripts/05_egarch_fit.py
 python scripts/06_out_of_sample_eval.py
 python scripts/07_daily_target_comparison.py
+python -m unittest discover -s tests -v
 ```
 
 Each script reads the CSV(s) produced by earlier steps, so they should be run
 in order the first time.
 
+The data end date is frozen at August 29, 2026 (exclusive in yfinance), so the
+published sample ends on August 28, 2026 and can be reproduced.
+
 ## Limitations
 
 GARCH assumes normally distributed shocks despite SPY's fat-tailed return
-distribution; parameters are re-estimated quarterly rather than daily during
-out-of-sample evaluation; and the test period contains only one major
-volatility event. See [`WRITEUP.md`](WRITEUP.md) for the full discussion.
+distribution; squared daily returns are an unbiased but very noisy variance
+proxy when the conditional mean is negligible; parameters are re-estimated
+quarterly rather than daily; and the test period contains relatively few major
+volatility events. See [`WRITEUP.md`](WRITEUP.md) for the full discussion.
