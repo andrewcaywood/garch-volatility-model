@@ -1,146 +1,181 @@
-"""
-Step 6: Out-of-Sample Evaluation
-GARCH Volatility Forecasting Project
-
-Splits the data into a training period and a test period, fits GARCH(1,1)
-and EGARCH(1,1) on the training period only, then produces rolling
-one-step-ahead forecasts through the test period. Parameters are
-re-estimated periodically (not daily) to keep runtime reasonable, but
-forecasts are still updated every day using the actual returns observed,
-so they're comparable to the daily-updating naive baseline. Compares
-GARCH, EGARCH, and the naive baseline against realized volatility using
-RMSE.
-"""
+"""Step 6: target-aligned one-step-ahead variance evaluation."""
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from arch import arch_model
+from pathlib import Path
 
-# ---- Config ----
-RETURNS_CSV = "spy_returns.csv"
-BASELINE_CSV = "spy_baseline_vol.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = PROJECT_ROOT / "outputs"
+RETURNS_CSV = OUTPUT_DIR / "spy_returns.csv"
+BASELINE_CSV = OUTPUT_DIR / "spy_baseline_vol.csv"
+OUTPUT_CSV = OUTPUT_DIR / "spy_oos_evaluation.csv"
+SCORES_CSV = OUTPUT_DIR / "spy_oos_scores.csv"
+OUTPUT_PLOT = OUTPUT_DIR / "spy_oos_evaluation_plot.png"
 TRADING_DAYS = 252
-TRAIN_END = "2023-12-31"   # everything up to here = training data
-REFIT_EVERY = 63           # re-estimate parameters roughly quarterly
-WINDOW = 30                # must match the window used in step 2's realized vol
+TRAIN_END = "2023-12-31"
+REFIT_EVERY = 63
+
 
 def load_returns(path: str) -> pd.Series:
     df = pd.read_csv(path, index_col=0, parse_dates=True)
-    return df["LogReturn"]
+    if "LogReturn" not in df.columns:
+        raise ValueError(f"Expected a 'LogReturn' column in {path}")
+    return df["LogReturn"].dropna().sort_index()
 
-def rolling_forecast(returns: pd.Series, vol_model: str, train_end: str, refit_every: int):
-    """
-    Produce one-step-ahead annualized volatility forecasts for the test
-    period, updated daily.
 
-    Parameters are re-estimated every `refit_every` trading days rather
-    than daily, for compute cost. Between re-estimations, forecasts still
-    update daily: a model is fit on the full return series with parameters
-    fixed at their most recent estimate, and its forecast is generated
-    using arch's fixed-parameter forecasting, which runs the volatility
-    recursion against actual observed returns each day. Only the
-    parameters (omega, alpha, beta, etc.) stay constant between
-    re-estimations -- the forecast itself reacts to new data daily.
-    """
-    scaled = returns * 100
+def rolling_variance_forecast(
+    returns: pd.Series,
+    vol_model: str,
+    train_end: str,
+    refit_every: int,
+) -> pd.Series:
+    """Return target-aligned one-step-ahead daily variance forecasts."""
+    if refit_every <= 0:
+        raise ValueError("refit_every must be positive")
+    if vol_model not in {"GARCH", "EGARCH"}:
+        raise ValueError("vol_model must be 'GARCH' or 'EGARCH'")
+
+    scaled = returns.sort_index() * 100
     test_dates = scaled.index[scaled.index > train_end]
+    if test_dates.empty:
+        raise ValueError("No observations occur after train_end")
 
-    forecasts = {}
-    refit_points = test_dates[::refit_every]
+    forecasts: dict[pd.Timestamp, float] = {}
+    for block_start in test_dates[::refit_every]:
+        start_pos = scaled.index.get_loc(block_start)
+        history = scaled.iloc[:start_pos]
+        if history.empty:
+            raise ValueError("Training sample is empty")
 
-    for block_start in refit_points:
-        # Estimate parameters using all data strictly before this block starts
-        history = scaled.loc[:block_start].iloc[:-1]
-        model = arch_model(history, vol=vol_model,
-                            p=1, o=(1 if vol_model == "EGARCH" else 0), q=1,
-                            dist="normal")
-        fitted = model.fit(disp="off")
+        model_kwargs = {
+            "vol": vol_model,
+            "p": 1,
+            "o": 1 if vol_model == "EGARCH" else 0,
+            "q": 1,
+            "dist": "normal",
+        }
+        fitted = arch_model(history, **model_kwargs).fit(disp="off")
 
-        # Forecast one-step-ahead for every day in this block, using the
-        # full series and fixed parameters, so the recursion reflects real
-        # returns as they occur.
-        full_model = arch_model(scaled, vol=vol_model,
-                                 p=1, o=(1 if vol_model == "EGARCH" else 0), q=1,
-                                 dist="normal")
-        fixed_res = full_model.fix(fitted.params)
+        # Target alignment places the forecast made through t-1 on date t.
+        fixed = arch_model(scaled, **model_kwargs).fix(fitted.params)
+        end_pos = min(start_pos + refit_every, len(scaled))
+        block_dates = scaled.index[start_pos:end_pos]
+        block = fixed.forecast(
+            horizon=1,
+            start=start_pos - 1,
+            align="target",
+            reindex=True,
+        ).variance["h.1"].loc[block_dates]
 
-        block_end_idx = min(scaled.index.get_loc(block_start) + refit_every, len(scaled))
-        block_forecast = fixed_res.forecast(horizon=1, start=block_start, reindex=False)
+        # The model uses percentage returns; restore decimal-return variance.
+        forecasts.update((block / 100**2).to_dict())
 
-        block_dates = scaled.index[scaled.index.get_loc(block_start):block_end_idx]
-        daily_var = block_forecast.variance.values[:len(block_dates), 0]
-        daily_vol = np.sqrt(daily_var) / 100
-        annualized = daily_vol * np.sqrt(TRADING_DAYS)
+    result = pd.Series(forecasts, name=f"{vol_model}Variance").sort_index()
+    if result.isna().any() or not result.index.equals(test_dates):
+        raise RuntimeError("Forecast output is incomplete or misaligned")
+    return result
 
-        for d, v in zip(block_dates, annualized):
-            if d in test_dates:
-                forecasts[d] = v
 
-    return pd.Series(forecasts).sort_index()
+def _aligned(forecast: pd.Series, actual: pd.Series) -> pd.DataFrame:
+    aligned = pd.concat(
+        [forecast.rename("forecast"), actual.rename("actual")],
+        axis=1,
+        join="inner",
+    ).dropna()
+    if aligned.empty:
+        raise ValueError("Forecast and actual series have no overlapping observations")
+    if (aligned["forecast"] <= 0).any():
+        raise ValueError("Variance forecasts must be strictly positive")
+    return aligned
 
-def compute_rmse(forecast: pd.Series, actual: pd.Series) -> float:
-    aligned = pd.concat([forecast.rename("forecast"), actual.rename("actual")],
-                         axis=1).dropna()
-    return np.sqrt(((aligned["forecast"] - aligned["actual"]) ** 2).mean())
+
+def compute_mse(forecast: pd.Series, actual: pd.Series) -> float:
+    aligned = _aligned(forecast, actual)
+    return float(((aligned["forecast"] - aligned["actual"]) ** 2).mean())
+
+
+def compute_qlike(forecast: pd.Series, actual: pd.Series) -> float:
+    """QLIKE loss, omitting constants that do not affect model rankings."""
+    aligned = _aligned(forecast, actual)
+    return float((aligned["actual"] / aligned["forecast"]
+                  + np.log(aligned["forecast"])).mean())
+
 
 def main():
     returns = load_returns(RETURNS_CSV)
     baseline = pd.read_csv(BASELINE_CSV, index_col=0, parse_dates=True)
+    test_dates = returns.index[returns.index > TRAIN_END]
 
     print(f"Training period: through {TRAIN_END}")
-    print(f"Test period: {TRAIN_END} onward ({(returns.index > TRAIN_END).sum()} days)")
+    print(f"Test period: {test_dates.min().date()} to {test_dates.max().date()} "
+          f"({len(test_dates)} days)")
     print(f"Re-estimating parameters every {REFIT_EVERY} trading days\n")
 
-    realized = baseline["RealizedVol"]
+    print("Running target-aligned GARCH(1,1) forecasts...")
+    garch_variance = rolling_variance_forecast(
+        returns, "GARCH", TRAIN_END, REFIT_EVERY
+    )
+    print("Running target-aligned EGARCH(1,1) forecasts...")
+    egarch_variance = rolling_variance_forecast(
+        returns, "EGARCH", TRAIN_END, REFIT_EVERY
+    )
 
-    print("Running GARCH(1,1) rolling forecast (this may take a minute)...")
-    garch_forecast = rolling_forecast(returns, "GARCH", TRAIN_END, REFIT_EVERY)
+    naive_variance = (
+        baseline.loc[test_dates, "NaiveForecast"].pow(2) / TRADING_DAYS
+    ).rename("NaiveVariance")
+    squared_return = returns.loc[test_dates].pow(2).rename("SquaredReturn")
 
-    print("Running EGARCH(1,1) rolling forecast (this may take a minute)...")
-    egarch_forecast = rolling_forecast(returns, "EGARCH", TRAIN_END, REFIT_EVERY)
+    forecasts = {
+        "Naive": naive_variance,
+        "GARCH": garch_variance,
+        "EGARCH": egarch_variance,
+    }
+    scores = pd.DataFrame({
+        name: {
+            "MSE": compute_mse(forecast, squared_return),
+            "QLIKE": compute_qlike(forecast, squared_return),
+        }
+        for name, forecast in forecasts.items()
+    }).T
 
-    naive_forecast = baseline["NaiveForecast"]
-    naive_forecast = naive_forecast[naive_forecast.index > TRAIN_END]
-
-    rmse_garch = compute_rmse(garch_forecast, realized)
-    rmse_egarch = compute_rmse(egarch_forecast, realized)
-    rmse_naive = compute_rmse(naive_forecast, realized)
-
-    print("\n--- Out-of-sample RMSE vs. realized volatility (lower = better) ---")
-    print(f"Naive baseline: {rmse_naive:.4f}")
-    print(f"GARCH(1,1):     {rmse_garch:.4f}")
-    print(f"EGARCH(1,1):    {rmse_egarch:.4f}")
-
-    best = min([("Naive", rmse_naive), ("GARCH", rmse_garch), ("EGARCH", rmse_egarch)],
-               key=lambda x: x[1])
-    print(f"\nBest overall (lowest RMSE): {best[0]}")
+    print("\n--- One-step-ahead variance forecast losses (lower = better) ---")
+    print(scores.to_string(float_format=lambda value: f"{value:.8g}"))
+    print(f"\nBest by MSE:   {scores['MSE'].idxmin()}")
+    print(f"Best by QLIKE: {scores['QLIKE'].idxmin()}")
 
     results = pd.DataFrame({
-        "RealizedVol": realized[realized.index > TRAIN_END],
-        "NaiveForecast": naive_forecast,
-        "GARCHForecast": garch_forecast,
-        "EGARCHForecast": egarch_forecast,
+        "SquaredReturn": squared_return,
+        "Trailing30DayVol": baseline.loc[test_dates, "RealizedVol"],
+        "NaiveVariance": naive_variance,
+        "GARCHVariance": garch_variance,
+        "EGARCHVariance": egarch_variance,
     })
-    results.to_csv("spy_oos_evaluation.csv")
-    print("\nSaved detailed results to spy_oos_evaluation.csv")
+    for name in ["Naive", "GARCH", "EGARCH"]:
+        results[f"{name}Forecast"] = np.sqrt(
+            results[f"{name}Variance"] * TRADING_DAYS
+        )
+    results.to_csv(OUTPUT_CSV, lineterminator="\n")
+    scores.to_csv(SCORES_CSV, lineterminator="\n")
+    print(f"\nSaved forecasts to {OUTPUT_CSV}")
+    print(f"Saved loss scores to {SCORES_CSV}")
 
     plt.figure(figsize=(11, 5))
-    plt.plot(results["RealizedVol"], label="Realized Volatility (actual)",
-              linewidth=1.1, color="black")
-    plt.plot(results["NaiveForecast"], label=f"Naive (RMSE={rmse_naive:.4f})",
-              linewidth=0.8, alpha=0.7)
-    plt.plot(results["GARCHForecast"], label=f"GARCH(1,1) (RMSE={rmse_garch:.4f})",
-              linewidth=0.8, alpha=0.8)
-    plt.plot(results["EGARCHForecast"], label=f"EGARCH(1,1) (RMSE={rmse_egarch:.4f})",
-              linewidth=0.8, alpha=0.8)
-    plt.title(f"Out-of-Sample Volatility Forecasts vs. Realized ({TRAIN_END} onward)")
-    plt.ylabel("Annualized Volatility")
+    plt.plot(results["Trailing30DayVol"],
+             label="Trailing 30-day volatility (context)",
+             linewidth=1.0, color="black", alpha=0.65)
+    for name in ["Naive", "GARCH", "EGARCH"]:
+        plt.plot(results[f"{name}Forecast"],
+                 label=f"{name} one-day forecast", linewidth=0.8, alpha=0.8)
+    plt.title("Target-Aligned One-Step-Ahead Volatility Forecasts")
+    plt.ylabel("Annualized volatility")
     plt.xlabel("Date")
     plt.legend()
     plt.tight_layout()
-    plt.savefig("spy_oos_evaluation_plot.png", dpi=150)
-    print("Saved plot to spy_oos_evaluation_plot.png")
+    plt.savefig(OUTPUT_PLOT, dpi=150)
+    print(f"Saved plot to {OUTPUT_PLOT}")
+
 
 if __name__ == "__main__":
     main()
