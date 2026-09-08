@@ -1,21 +1,107 @@
 # Volatility Clustering in SPY: A GARCH-Based Forecasting Comparison
 
-**Research question**
+## Research question
 
-Volatility in equity markets is not constant over time. Instead, high-volatility periods tend to cluster together, while low-volatility periods tend to be prolonged. This project tries to answer two specific questions: (1) whether a GARCH(1,1) model can capture such clustering of volatility when applied to SPY return data, and (2) whether it forecasts better than a naive alternative.
+Volatility in equity markets clusters: large movements tend to be followed by
+large movements and quiet periods tend to persist. This project asks whether a
+GARCH(1,1) model captures that conditional-variance structure in SPY returns and
+whether GARCH-family one-day-ahead forecasts outperform a simple trailing-window
+benchmark out of sample.
 
-**Data and methodology**
+## Data and methodology
 
-Daily adjusted-close prices for SPY were obtained between 2010 and 2026 (4,188 trading days). Using the daily prices, daily log returns were then generated. Two baseline measures were created: a 30-day rolling realized volatility (a backward-looking measure of how volatile SPY actually was over the trailing month) and a naive forecast built from it (tomorrow's volatility = yesterday's 30-day realized volatility). Both exist to provide a benchmark, something to be beaten by more complicated models.
+The sample contains 4,188 daily SPY log returns from January 2010 through
+August 28, 2026. The download end date is frozen for reproducibility. Returns
+are expressed in percentage units while fitting the models and converted back
+to decimal units for evaluation.
 
-A GARCH(1,1) model was used, in which today's volatility is a weighted average of the long-term historical average, yesterday's forecast, and the size of yesterday's shock. The GARCH model was compared against an EGARCH(1,1) model, which is capable of capturing the leverage effect; both were first fit on the full 2010-2026 dataset to examine their parameters and overall fit. Separately, both models were re-estimated using only data through the end of 2023, then used to produce forecasts for 2024 to 2026 (updated daily using real, not future, returns), so their forecasts could be rated by RMSE against a naive baseline.
+The analysis first calculates a 30-day trailing realized-volatility series and
+a naive forecast equal to the preceding day's trailing volatility. It then fits
+constant-mean GARCH(1,1) and EGARCH(1,1) models with Gaussian innovations. The
+full-sample fits are used only for parameter interpretation and diagnostics.
 
-**Results**
+The genuine out-of-sample exercise begins on January 2, 2024. Model parameters
+are estimated using observations strictly before each forecast block and are
+re-estimated every 63 trading days. Between refits, the conditional-variance
+recursion updates daily with newly observed returns. Forecasts are explicitly
+target-aligned: the forecast indexed by date *t* uses information only through
+date *t-1*.
 
-The GARCH(1,1) model produced alpha + beta ~ 0.965, implying that shocks to volatility decay gradually and that a volatile period should stay elevated for some time before returning to normal. When Ljung-Box tests were carried out on the squared standardized residuals from the model, the p-value was ~0.0 for the raw returns vs. 0.82 for the GARCH residuals, confirming the model successfully removed the clustering of volatility present in the raw data. The EGARCH model's asymmetry term came out negative and statistically significant (gamma ~ -0.172), confirming the leverage effect: negative shocks raise future volatility more than equivalent positive shocks do. The AIC goodness-of-fit statistic was also smaller for the EGARCH model than for plain GARCH (10,564.6 vs. 10,756.9, respectively), meaning it fit the data better overall.
+Because the models produce one-day conditional-variance forecasts, the primary
+evaluation uses each day's squared return as a noisy proxy for that day's latent
+variance. Models are ranked using both mean squared error (MSE) and QLIKE. The
+backward-looking 30-day volatility series is retained for visual context but is
+not treated as the realization of a one-day forecast.
 
-Two out-of-sample tests were carried out: one against the smoothed 30-day realized-volatility target, and one against a noisier daily volatility proxy. Against the smoothed target, the naive baseline led the way with the lowest RMSE (0.0099 vs. 0.0525 for GARCH and 0.0624 for EGARCH), but against the noisier daily measure, GARCH came out ahead (0.0994 vs. 0.1276 for naive and 0.0999 for EGARCH).
+A secondary analysis converts forecasts to annualized volatility and compares
+them with absolute returns multiplied by √(π/2) and √252. This corrects the
+downward bias of raw absolute returns under a zero-mean Gaussian assumption.
+Since that assumption is restrictive, the secondary RMSE is supporting evidence
+rather than the headline comparison.
 
-**Limitations**
+## Full-sample model results
 
-The evaluation period (2024 to 2026) used in this project contains only one significant volatility shock (the April 2025 tariffs-related selloff). As such, any conclusions made about fat-tail behavior rest on very few episodes. Second, the GARCH model is based on the assumption of normally distributed innovations, which is not consistent with the fact that SPY shows clear excess kurtosis; a Student's-t distribution would probably fit better. Third, re-estimation was only performed on roughly a quarterly basis rather than daily, as would be customary in practice. Lastly, the switch in the best-performing model depending on whether the target was the smoothed 30-day realized volatility or the noisier daily measure is an indication that the choice of evaluation target - not just the choice of model - can significantly influence model ranking.
+The GARCH estimate has α + β ≈ 0.965, indicating persistent but mean-reverting
+conditional variance. Its implied long-run annualized volatility is about
+16.84%; ω itself is the variance-equation intercept, not the long-run variance.
+
+At lag 20, the Ljung–Box p-value for squared standardized GARCH residuals is
+approximately 0.82, compared with effectively zero for squared raw returns.
+This means the test finds no strong evidence of remaining squared-residual
+autocorrelation at the selected lags. It does not prove that every form of
+conditional heteroskedasticity has been removed.
+
+The EGARCH asymmetry coefficient is approximately -0.172 and is statistically
+significant in the fitted specification, consistent with negative shocks having
+a larger volatility effect than equal-sized positive shocks. EGARCH also has a
+lower full-sample AIC than GARCH (10,564.6 versus 10,756.9), indicating better
+relative in-sample fit among these two Gaussian specifications.
+
+## Corrected out-of-sample results
+
+Lower loss is better:
+
+| Model | Variance MSE | QLIKE |
+|---|---:|---:|
+| Naive trailing-window forecast | 1.9909e-7 | -8.3742 |
+| GARCH(1,1) | 1.8461e-7 | -8.4963 |
+| EGARCH(1,1) | **1.7011e-7** | **-8.5634** |
+
+EGARCH ranks first under both primary loss functions. The secondary,
+Gaussian-dependent volatility-level comparison produces the same ranking:
+
+| Model | RMSE vs. bias-adjusted absolute return |
+|---|---:|
+| Naive | 0.1482 |
+| GARCH(1,1) | 0.1390 |
+| EGARCH(1,1) | **0.1332** |
+
+These values replace the earlier results, which accidentally assigned
+origin-aligned forecasts to the dates on which they were produced rather than
+to the following dates they forecast. That one-day error allowed each day's
+return to influence the forecast scored against the same day's proxy.
+
+## Limitations
+
+- Squared daily returns are unbiased for the conditional second moment when the
+  conditional mean is negligible, but they are extremely noisy variance proxies.
+  Intraday realized variance would provide a stronger evaluation target.
+- Gaussian innovations do not describe the fat tails in SPY returns well. A
+  Student's-t specification should be tested as a robustness check.
+- Quarterly parameter refitting is computationally convenient but may respond
+  more slowly to structural changes than daily or monthly refitting.
+- The out-of-sample period is short and contains relatively few major volatility
+  episodes, so the ranking may not generalize to other market regimes.
+- MSE and QLIKE agree here, but forecast rankings can depend on the loss function
+  and the economic use of the forecast.
+- Yahoo Finance data may be revised by the provider even though the requested
+  sample dates and package versions are fixed.
+
+## Conclusion
+
+The corrected analysis supports three measured conclusions. First, GARCH(1,1)
+captures much of the squared-return autocorrelation detected by the selected
+diagnostic. Second, the negative EGARCH asymmetry coefficient is consistent with
+the equity leverage effect. Third, EGARCH provides the lowest out-of-sample MSE
+and QLIKE among the three forecasts tested. These are conditional findings for
+this sample and specification, not proof that EGARCH is universally superior.
