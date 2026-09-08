@@ -13,12 +13,16 @@ These serve as the comparison point for GARCH in later steps.
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 # ---- Config ----
-INPUT_CSV = "spy_returns.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = PROJECT_ROOT / "outputs"
+INPUT_CSV = OUTPUT_DIR / "spy_returns.csv"
 WINDOW = 30             # trailing window length in trading days
 TRADING_DAYS = 252      # annualization factor for daily vol
-OUTPUT_CSV = "spy_baseline_vol.csv"
+OUTPUT_CSV = OUTPUT_DIR / "spy_baseline_vol.csv"
+OUTPUT_PLOT = OUTPUT_DIR / "spy_baseline_vol_plot.png"
 
 def load_returns(path: str) -> pd.DataFrame:
     df = pd.read_csv(path, index_col=0, parse_dates=True)
@@ -52,7 +56,7 @@ def main():
         "NaiveForecast": naive_forecast
     }).dropna()
 
-    out.to_csv(OUTPUT_CSV)
+    out.to_csv(OUTPUT_CSV, lineterminator="\n")
     print(f"Saved {len(out)} rows to {OUTPUT_CSV}")
 
     print("\n--- Summary: annualized realized volatility ---")
@@ -70,8 +74,8 @@ def main():
     plt.xlabel("Date")
     plt.legend()
     plt.tight_layout()
-    plt.savefig("spy_baseline_vol_plot.png", dpi=150)
-    print("\nSaved plot to spy_baseline_vol_plot.png")
+    plt.savefig(OUTPUT_PLOT, dpi=150)
+    print(f"\nSaved plot to {OUTPUT_PLOT}")
 
 if __name__ == "__main__":
     main()

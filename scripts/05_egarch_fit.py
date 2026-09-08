@@ -13,12 +13,16 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from arch import arch_model
+from pathlib import Path
 
 # ---- Config ----
-RETURNS_CSV = "spy_returns.csv"
-GARCH_FITTED_CSV = "spy_garch_fitted.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = PROJECT_ROOT / "outputs"
+RETURNS_CSV = OUTPUT_DIR / "spy_returns.csv"
+GARCH_FITTED_CSV = OUTPUT_DIR / "spy_garch_fitted.csv"
 TRADING_DAYS = 252
-OUTPUT_CSV = "spy_egarch_fitted.csv"
+OUTPUT_CSV = OUTPUT_DIR / "spy_egarch_fitted.csv"
+OUTPUT_PLOT = OUTPUT_DIR / "spy_garch_vs_egarch_plot.png"
 
 def load_returns(path: str) -> pd.Series:
     df = pd.read_csv(path, index_col=0, parse_dates=True)
@@ -41,7 +45,7 @@ def main():
     gamma = params.get("gamma[1]", None)  # asymmetry (leverage) term
 
     print("\n--- Parameter interpretation ---")
-    print(f"omega:    {params['omega']:.5f}  (long-run log-variance level)")
+    print(f"omega:    {params['omega']:.5f}  (log-variance equation intercept)")
     print(f"alpha[1]: {params['alpha[1]']:.4f}  (reaction to shock size)")
     if gamma is not None:
         print(f"gamma[1]: {gamma:.4f}  (asymmetry / leverage term)")
@@ -60,13 +64,15 @@ def main():
     annualized_vol.index = returns.index[-len(annualized_vol):]
 
     out = pd.DataFrame({"EGARCH_ConditionalVol": annualized_vol})
-    out.to_csv(OUTPUT_CSV)
+    out.to_csv(OUTPUT_CSV, lineterminator="\n")
     print(f"\nSaved fitted conditional volatility to {OUTPUT_CSV}")
 
     # Model comparison via AIC/BIC (lower = better, penalized for complexity)
     print("\n--- Model comparison ---")
     print(f"EGARCH  AIC: {fitted.aic:.2f}   BIC: {fitted.bic:.2f}")
-    print("Compare against GARCH(1,1) AIC/BIC from step 3's output.")
+    print("Compare against GARCH(1,1) AIC/BIC from step 3's output. Lower values "
+          "indicate better relative in-sample fit among these specifications; "
+          "they do not establish out-of-sample superiority.")
 
     # EGARCH vs GARCH fitted volatility
     try:
@@ -79,8 +85,8 @@ def main():
         plt.xlabel("Date")
         plt.legend()
         plt.tight_layout()
-        plt.savefig("spy_garch_vs_egarch_plot.png", dpi=150)
-        print("Saved comparison plot to spy_garch_vs_egarch_plot.png")
+        plt.savefig(OUTPUT_PLOT, dpi=150)
+        print(f"Saved comparison plot to {OUTPUT_PLOT}")
     except FileNotFoundError:
         print(f"\n({GARCH_FITTED_CSV} not found -- skipping comparison plot. Run step 3 first.)")
 

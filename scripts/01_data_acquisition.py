@@ -11,12 +11,18 @@ import yfinance as yf
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 # ---- Config ----
 TICKER = "SPY"
 START_DATE = "2010-01-01"   # long history for GARCH to fit on
-END_DATE = None             # None = up to today
-OUTPUT_CSV = "spy_returns.csv"
+# yfinance treats end as exclusive. Freezing it keeps the published sample
+# reproducible and includes observations through 2026-08-28.
+END_DATE = "2026-08-29"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = PROJECT_ROOT / "outputs"
+OUTPUT_CSV = OUTPUT_DIR / "spy_returns.csv"
+OUTPUT_PLOT = OUTPUT_DIR / "spy_returns_plot.png"
 
 def fetch_price_data(ticker: str, start: str, end: str | None) -> pd.DataFrame:
     """Download daily OHLCV data and return it with a clean DatetimeIndex."""
@@ -41,6 +47,7 @@ def compute_log_returns(prices: pd.DataFrame, price_col: str = "Close") -> pd.Se
     return log_returns.dropna()
 
 def main():
+    OUTPUT_DIR.mkdir(exist_ok=True)
     print(f"Fetching {TICKER} price history from {START_DATE}...")
     prices = fetch_price_data(TICKER, START_DATE, END_DATE)
     print(f"Retrieved {len(prices)} trading days.")
@@ -51,7 +58,7 @@ def main():
         "Close": prices["Close"].loc[log_returns.index],
         "LogReturn": log_returns
     })
-    out.to_csv(OUTPUT_CSV)
+    out.to_csv(OUTPUT_CSV, lineterminator="\n")
     print(f"Saved {len(out)} rows to {OUTPUT_CSV}")
 
     print("\n--- Summary statistics: daily log returns ---")
@@ -72,8 +79,8 @@ def main():
     axes[1].set_xlabel("Date")
 
     plt.tight_layout()
-    plt.savefig("spy_returns_plot.png", dpi=150)
-    print("\nSaved diagnostic plot to spy_returns_plot.png")
+    plt.savefig(OUTPUT_PLOT, dpi=150)
+    print(f"\nSaved diagnostic plot to {OUTPUT_PLOT}")
 
 if __name__ == "__main__":
     main()

@@ -12,12 +12,16 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from arch import arch_model
+from pathlib import Path
 
 # ---- Config ----
-RETURNS_CSV = "spy_returns.csv"
-BASELINE_CSV = "spy_baseline_vol.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = PROJECT_ROOT / "outputs"
+RETURNS_CSV = OUTPUT_DIR / "spy_returns.csv"
+BASELINE_CSV = OUTPUT_DIR / "spy_baseline_vol.csv"
 TRADING_DAYS = 252
-OUTPUT_CSV = "spy_garch_fitted.csv"
+OUTPUT_CSV = OUTPUT_DIR / "spy_garch_fitted.csv"
+OUTPUT_PLOT = OUTPUT_DIR / "spy_garch_fit_plot.png"
 
 def load_returns(path: str) -> pd.Series:
     df = pd.read_csv(path, index_col=0, parse_dates=True)
@@ -43,16 +47,24 @@ def main():
 
     # Parameter interpretation
     params = fitted.params
-    omega = params["omega"]     # long-run variance level
+    omega = params["omega"]     # variance-equation intercept
     alpha = params["alpha[1]"]  # weight on yesterday's shock (squared residual)
     beta = params["beta[1]"]    # weight on yesterday's forecasted variance
 
     print("\n--- Parameter interpretation ---")
-    print(f"omega (long-run variance level): {omega:.5f}")
+    print(f"omega (variance-equation intercept): {omega:.5f}")
     print(f"alpha (weight on yesterday's shock):    {alpha:.4f}")
     print(f"beta  (weight on yesterday's forecast):  {beta:.4f}")
     print(f"alpha + beta = {alpha + beta:.4f}  (persistence of volatility shocks; "
           f"closer to 1 = slower decay)")
+
+    if alpha + beta < 1:
+        long_run_variance = omega / (1 - alpha - beta)
+        long_run_daily_vol = np.sqrt(long_run_variance) / 100
+        long_run_annualized_vol = long_run_daily_vol * np.sqrt(TRADING_DAYS)
+        print(f"Long-run variance (percent-return units): {long_run_variance:.5f}")
+        print(f"Long-run annualized volatility: {long_run_annualized_vol:.4f} "
+              f"({long_run_annualized_vol * 100:.2f}%)")
 
     if alpha + beta >= 1:
         print("Note: alpha + beta >= 1 indicates near-unit-root behavior in variance "
@@ -64,7 +76,7 @@ def main():
     annualized_vol.index = returns.index[-len(annualized_vol):]
 
     out = pd.DataFrame({"GARCH_ConditionalVol": annualized_vol})
-    out.to_csv(OUTPUT_CSV)
+    out.to_csv(OUTPUT_CSV, lineterminator="\n")
     print(f"\nSaved fitted conditional volatility to {OUTPUT_CSV}")
 
     # GARCH fitted vol vs. realized vol baseline
@@ -80,8 +92,8 @@ def main():
         plt.xlabel("Date")
         plt.legend()
         plt.tight_layout()
-        plt.savefig("spy_garch_fit_plot.png", dpi=150)
-        print("Saved plot to spy_garch_fit_plot.png")
+        plt.savefig(OUTPUT_PLOT, dpi=150)
+        print(f"Saved plot to {OUTPUT_PLOT}")
     except FileNotFoundError:
         print(f"\n({BASELINE_CSV} not found -- skipping comparison plot. Run step 2 first.)")
 

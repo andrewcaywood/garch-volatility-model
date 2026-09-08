@@ -17,9 +17,13 @@ import matplotlib.pyplot as plt
 from arch import arch_model
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.graphics.tsaplots import plot_acf
+from pathlib import Path
 
 # ---- Config ----
-RETURNS_CSV = "spy_returns.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = PROJECT_ROOT / "outputs"
+RETURNS_CSV = OUTPUT_DIR / "spy_returns.csv"
+OUTPUT_PLOT = OUTPUT_DIR / "spy_residual_diagnostics_plot.png"
 LAGS = 20  # standard choice for daily data (~1 trading month)
 
 def load_returns(path: str) -> pd.Series:
@@ -61,7 +65,9 @@ def main():
               "a legitimate limitation to note, not a coding error.")
     else:
         print("p >= 0.05: no strong evidence of remaining clustering.")
-        print("GARCH(1,1) appears to have adequately captured the clustering structure.")
+        print("At this lag choice, the test finds no strong evidence of remaining "
+              "squared-residual autocorrelation. This is not proof that all "
+              "conditional-variance structure has been removed.")
 
     # Same test on raw returns, for comparison / context
     raw_squared = (returns - returns.mean()) ** 2
@@ -80,8 +86,8 @@ def main():
     axes[1].set_title("ACF: Squared Raw Returns (pre-model)")
 
     plt.tight_layout()
-    plt.savefig("spy_residual_diagnostics_plot.png", dpi=150)
-    print("\nSaved plot to spy_residual_diagnostics_plot.png")
+    plt.savefig(OUTPUT_PLOT, dpi=150)
+    print(f"\nSaved plot to {OUTPUT_PLOT}")
 
 if __name__ == "__main__":
     main()
